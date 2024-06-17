@@ -7,7 +7,7 @@ import re
 import json
 from collections import defaultdict
 from typing import Optional, Tuple, Dict, List
-from experiments_lib import init_command_chain_with_config_thp, generate_perf_stat_batch, \
+from experiments_lib import init_command_chain_with_config_thp, init_command_chain_with_config, generate_perf_stat_batch, \
     get_sockorder_omp_places, get_sequential_omp_places, \
     get_perf_stat_cmd, run_shell_command, grid_experiment
     
@@ -41,7 +41,7 @@ def test_events(program_path: str, events: str):
     
     
     
-def collect_samples(program_path: str, events: str, nruns: int, nwarmups: int):
+def collect_samples_thp(program_path: str, events: str, nruns: int, nwarmups: int):
     def run_with_params(name: str, nb: bool, omp_places: Optional[str], thp_enabled: str, thp_defrag: str):
         logging.info(f"Running with params : name = {name}, nb = {nb}, ompPlaces = {omp_places}, thp_enabled = {thp_enabled}, thp_defrag = {thp_defrag}")
         command_chain = init_command_chain_with_config_thp(nb, omp_places, thp_enabled, thp_defrag)
@@ -60,6 +60,23 @@ def collect_samples(program_path: str, events: str, nruns: int, nwarmups: int):
     )
     
     
+def collect_samples(program_path: str, events: str, nruns: int, nwarmups: int):
+    def run_with_params(name: str, nb: bool, omp_places: Optional[str]):
+        logging.info(f"Running with params : name = {name}, nb = {nb}, ompPlaces = {omp_places}")
+        command_chain = init_command_chain_with_config(nb, omp_places)
+        command_chain += generate_perf_stat_batch(program_path, nruns, nwarmups, RESULTS_DIR_PATH, name, events)
+        command_chain.execute()
+        
+    grid_experiment(
+        ["nb", "omp_places"],
+        [
+            [("on", True), ("off", False)],
+            [("sequential", get_sequential_omp_places()), ("sockorder", get_sockorder_omp_places()), ("none", None)]
+        ],
+        run_with_params
+    )
+    
+    
     
     
     
@@ -70,6 +87,9 @@ def parse_per_cpu_result_file(file_path) -> Tuple[pd.DataFrame, Dict]:
     nas_time_match = re.search(r'Time in seconds\s+=\s+(\d*.\d*)', text)
     if nas_time_match :
         nas_time = float(nas_time_match.group(1))
+    else:
+        logging.error(f"Unable to find NAS time in file {file_path}")
+        exit()
         
     json_begin_pos = text.find('{')
     json_end_pos = text.rfind('}')
@@ -95,6 +115,7 @@ def parse_per_cpu_result_file(file_path) -> Tuple[pd.DataFrame, Dict]:
         events_df["LLC-load-misses-ratio"] = events_df["LLC-load-misses"] / events_df["LLC-loads"]
         events_df["LLC-store-misses-ratio"] = events_df["LLC-store-misses"] / events_df["LLC-stores"]
     
+    # ml_l3_mr = Mem Load L3 Miss Remote
     events_df["ml_l3_mr.all"] = events_df["mem_load_l3_miss_retired.remote_dram"] + events_df["mem_load_l3_miss_retired.local_dram"]
     # events_df["mem_load_l3_miss_retired-over-LLC-all"] = events_df["ml_l3_mr.all"] / events_df["LLC-all-misses"]
     events_df["ml_l3_mr.remote_over_local_dram"] = events_df["mem_load_l3_miss_retired.remote_dram"] / events_df["mem_load_l3_miss_retired.local_dram"]
@@ -113,6 +134,8 @@ def parse_batch_results(dir_path) :
     file_paths = [os.path.join(dir_path, file) for file in os.listdir(dir_path) if file.endswith(EXTENSION)]
     concatenated_dict = defaultdict(list)
     for file_path in file_paths :
+        if "sample_measure_command" in os.path.basename(file_path):
+            continue
         events_df, meta_values = parse_per_cpu_result_file(file_path)
         for series_name, series in events_df.items() :
             concatenated_dict[f"min:{series_name}"].append(series.min())
@@ -126,7 +149,7 @@ def parse_batch_results(dir_path) :
 
 
 # TODO Maybe return the number of CPUs so that we can compute the average when we have only the sum ?
-def parse_batches_results_from_benchmark(benchmark_dir_path: str) -> List[pd.DataFrame] :
+def parse_batches_results_from_benchmark(benchmark_dir_path: str) -> Dict[str, pd.DataFrame] :
     dfs = {}
     contents = os.listdir(benchmark_dir_path)
     for c in contents :
@@ -149,13 +172,44 @@ def combine_benchmark_dir(benchmark_dir_path: str) :
         df = pd.concat([df, parse_batch_results(dir_path)], ignore_index=True)
     return df
 
-    
-    
-    
-    
-def analyze_samples():
-    pass
 
+
+
+def print_correlations(df: pd.DataFrame, target_column = "nas_runtime"):
+    # We first remove all the avg columns if any because will give the same result as sum
+    
+    avg_columns = [col for col in df.columns if "avg:" in col]
+    df = df.drop(avg_columns, axis=1)
+    pd.set_option('display.max_rows', 500)
+    correlation_df = df.corr()
+    correlation_series = correlation_df[target_column].drop(target_column).sort_values(ascending=False, key=abs)
+
+    threshold = 0.98
+    previous = []
+    for col in correlation_series.index:
+        was_dropped = False
+        for previous_col in previous:
+            # print(correlation_df.loc[col, previous_col])
+            if correlation_df.loc[col, previous_col] > threshold:
+                # print(f"Found correlation > {threshold} between {col} and {previous_col}")
+                correlation_series.drop(col, inplace=True)
+                was_dropped = True
+                break
+        if not was_dropped and "time" not in col:
+            previous.append(col)
+            
+    print(correlation_series)
+
+
+    
+    
+    
+    
+def analyze(benchmark_dir_path):
+    dfs = parse_batches_results_from_benchmark(benchmark_dir_path)
+    print(dfs)
+    concatenated = pd.concat(dfs.values())
+    print_correlations(concatenated)
 
 
 
@@ -163,16 +217,26 @@ def analyze_samples():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--target", help="The program to run and analyze")
-    parser.add_argument('--result_dir', help='The directory that contains a run to be analyzed')
+    parser.add_argument("--run", help="The program to run and analyze")
+    parser.add_argument('--analyze', help='The directory that contains a run to be analyzed')
     parser.add_argument
     args = parser.parse_args()
-    target: str = args.target
-    benchmark_dir = args.result_dir
-    # if not os.path.isfile(target):
-    #     logging.error(f"Unable to find target {target}")
-    #     exit()
-    print(benchmark_dir)
+    
+    if args.run is not None and args.analyze is not None :
+        logging.error("Either --run or --analyze should be specified")
+        exit()
+        
+    if args.analyze is not None :
+        if not os.path.isdir(args.analyze):
+            logging.error(f"{args.analyze} is not a directory")
+            exit()
+        benchmark_dir = args.analyze
+        analyze(benchmark_dir)
+        exit()
+        
+    if not os.path.isfile(args.run):
+        logging.error(f"Unable to find target {args.run}")
+        exit()
         
     events_per_category = {}
     events_per_category["l3_cache"] = [
@@ -205,6 +269,11 @@ if __name__ == "__main__":
     all_events = ",".join(joined_events)
     logging.info(joined_events)
     logging.info(all_events)
+    
+    program_path = args.run
+    collect_samples(program_path, all_events, 5, 1)
+    
+    
     
     # collect_samples(target, all_events, 5, 1)
         
