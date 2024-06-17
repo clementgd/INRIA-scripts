@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import Optional, Tuple, Dict, List
 from experiments_lib import init_command_chain_with_config_thp, init_command_chain_with_config, generate_perf_stat_batch, \
     get_sockorder_omp_places, get_sequential_omp_places, \
-    get_perf_stat_cmd, run_shell_command, grid_experiment
+    get_perf_stat_cmd, run_shell_command, grid_experiment, get_benchmark_dir
     
 import logging
 
@@ -75,6 +75,8 @@ def collect_samples(program_path: str, events: str, nruns: int, nwarmups: int):
         ],
         run_with_params
     )
+    
+    return get_benchmark_dir(RESULTS_DIR_PATH, program_path)
     
     
     
@@ -205,7 +207,7 @@ def print_correlations(df: pd.DataFrame, target_column = "nas_runtime"):
     
     
     
-def analyze(benchmark_dir_path):
+def analyze_samples(benchmark_dir_path):
     dfs = parse_batches_results_from_benchmark(benchmark_dir_path)
     print(dfs)
     concatenated = pd.concat(dfs.values())
@@ -231,7 +233,7 @@ if __name__ == "__main__":
             logging.error(f"{args.analyze} is not a directory")
             exit()
         benchmark_dir = args.analyze
-        analyze(benchmark_dir)
+        analyze_samples(benchmark_dir)
         exit()
         
     if not os.path.isfile(args.run):
@@ -271,7 +273,8 @@ if __name__ == "__main__":
     logging.info(all_events)
     
     program_path = args.run
-    collect_samples(program_path, all_events, 5, 1)
+    benchmark_dir = collect_samples(program_path, all_events, 5, 1)
+    analyze_samples(benchmark_dir)
     
     
     

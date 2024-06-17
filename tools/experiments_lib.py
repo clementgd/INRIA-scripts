@@ -174,6 +174,9 @@ def get_date():
 def get_setup_info(program_name: str):
     return f"{program_name}__{MACHINE_NAME}__v{get_kernel_version()}__{get_performance_governor()}__{get_date()}"
 
+def get_benchmark_dir(results_dir_path: str, program_path: str):
+    program_name = os.path.basename(program_path)
+    return os.path.join(results_dir_path, get_setup_info(program_name))
 
 def persist_machine_info(parent_directory: Optional[str] = None):
     lines = []
@@ -333,6 +336,7 @@ def grid_experiment(parameters: List[str], parameter_values: List[List[tuple]], 
         return "__".join(params_str)
     
     def recu_explore(idx: int):
+        nonlocal nruns
         if idx == n:
             arg_dict = arg_dict_from_curr_params()
             arg_dict["name"] = name_from_curr_params()
