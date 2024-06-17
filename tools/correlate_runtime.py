@@ -12,40 +12,12 @@ from experiments_lib import init_command_chain_with_config_thp, init_command_cha
     get_perf_stat_cmd, run_shell_command, grid_experiment, get_benchmark_dir
     
 import logging
-
-# Set up basic configuration for logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='\n### PY ### %(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%H:%M:%S'  # Only display hours, minutes, and seconds
-)
     
-
-EXTENSION = ".txt"
-RESULTS_DIR_PATH = "/tmp/perf_stat"
-
-# TODO Make the number of runs and warmup adjustable
-
-
-# Run the program in each of the 6 configuration into /tmp/... and then use these as an input for correlation computation.
-# Could also draw a diagram of the most correlated stuff ?
-# But the best would be to have a graph of the most correlated features, in blue if positive, red if negative
-
-
-    
-def test_events(program_path: str, events: str):
-    perf_stat_cmd = get_perf_stat_cmd(program_path, events, "./test_events_result.txt")
-    print(f"Shell command : {perf_stat_cmd}")
-    run_shell_command(perf_stat_cmd)
-    
-    
-    
-    
-def collect_samples_thp(program_path: str, events: str, nruns: int, nwarmups: int):
+def collect_samples_thp(program_path: str, events: str, results_dir_path: str, nruns: int, nwarmups: int):
     def run_with_params(name: str, nb: bool, omp_places: Optional[str], thp_enabled: str, thp_defrag: str):
         logging.info(f"Running with params : name = {name}, nb = {nb}, ompPlaces = {omp_places}, thp_enabled = {thp_enabled}, thp_defrag = {thp_defrag}")
         command_chain = init_command_chain_with_config_thp(nb, omp_places, thp_enabled, thp_defrag)
-        command_chain += generate_perf_stat_batch(program_path, nruns, nwarmups, RESULTS_DIR_PATH, name, events)
+        command_chain += generate_perf_stat_batch(program_path, nruns, nwarmups, results_dir_path, name, events)
         command_chain.execute()
         
     grid_experiment(
@@ -59,12 +31,15 @@ def collect_samples_thp(program_path: str, events: str, nruns: int, nwarmups: in
         run_with_params
     )
     
+    return get_benchmark_dir(results_dir_path, program_path)
     
-def collect_samples(program_path: str, events: str, nruns: int, nwarmups: int):
+
+# TODO Rename with something like "collect perf stats ?"
+def collect_samples(program_path: str, events: str, results_dir_path: str, nruns: int, nwarmups: int):
     def run_with_params(name: str, nb: bool, omp_places: Optional[str]):
         logging.info(f"Running with params : name = {name}, nb = {nb}, ompPlaces = {omp_places}")
         command_chain = init_command_chain_with_config(nb, omp_places)
-        command_chain += generate_perf_stat_batch(program_path, nruns, nwarmups, RESULTS_DIR_PATH, name, events)
+        command_chain += generate_perf_stat_batch(program_path, nruns, nwarmups, results_dir_path, name, events)
         command_chain.execute()
         
     grid_experiment(
@@ -76,7 +51,7 @@ def collect_samples(program_path: str, events: str, nruns: int, nwarmups: int):
         run_with_params
     )
     
-    return get_benchmark_dir(RESULTS_DIR_PATH, program_path)
+    return get_benchmark_dir(results_dir_path, program_path)
     
     
     
@@ -119,13 +94,9 @@ def parse_per_cpu_result_file(file_path) -> Tuple[pd.DataFrame, Dict]:
     
     # ml_l3_mr = Mem Load L3 Miss Remote
     events_df["ml_l3_mr.all"] = events_df["mem_load_l3_miss_retired.remote_dram"] + events_df["mem_load_l3_miss_retired.local_dram"]
-    # events_df["mem_load_l3_miss_retired-over-LLC-all"] = events_df["ml_l3_mr.all"] / events_df["LLC-all-misses"]
     events_df["ml_l3_mr.remote_over_local_dram"] = events_df["mem_load_l3_miss_retired.remote_dram"] / events_df["mem_load_l3_miss_retired.local_dram"]
     events_df["ml_l3_mr.remote_over_total"] = events_df["mem_load_l3_miss_retired.remote_dram"] / events_df["ml_l3_mr.all"]
     events_df["ml_l3_mr.local_over_total"] = events_df["mem_load_l3_miss_retired.local_dram"] / events_df["ml_l3_mr.all"]
-    
-    # mem_load_l3_miss_retired.remote_fwd
-    # mem_load_l3_miss_retired.remote_hitms
     events_df["ml_l3_mr.fwd_over_total"] = events_df["mem_load_l3_miss_retired.remote_fwd"] / events_df["ml_l3_mr.all"]
     events_df["ml_l3_mr.hitm_over_total"] = events_df["mem_load_l3_miss_retired.remote_hitm"] / events_df["ml_l3_mr.all"]
     return events_df, meta_values
@@ -202,32 +173,33 @@ def print_correlations(df: pd.DataFrame, target_column = "nas_runtime"):
             
     print(correlation_series)
 
-
-    
-    
-    
     
 def analyze_samples(benchmark_dir_path):
     dfs = parse_batches_results_from_benchmark(benchmark_dir_path)
-    print(dfs)
     concatenated = pd.concat(dfs.values())
     print_correlations(concatenated)
 
 
 
-
-
 if __name__ == "__main__":
+    # Set up basic configuration for logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='\n### PY ### %(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'  # Only display hours, minutes, and seconds
+    )
+        
+    EXTENSION = ".txt"
+    RESULTS_DIR_PATH = "/tmp/perf_stat"
+    
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run", help="The program to run and analyze")
-    parser.add_argument('--analyze', help='The directory that contains a run to be analyzed')
-    parser.add_argument
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--run", metavar="PROGRAM_PATH", help="The program to run and analyze")
+    group.add_argument('--analyze', metavar="BENCHMARK_DIRECTORY", help='The directory containing a run to be analyzed')
+    parser.add_argument('--nruns', help='Number of runs to perform for each configuration', type=int, default=10)
+    parser.add_argument('--nwarmups', help='Number of warmups to perform for each configuration', type=int, default=1)
     args = parser.parse_args()
     
-    if args.run is not None and args.analyze is not None :
-        logging.error("Either --run or --analyze should be specified")
-        exit()
-        
     if args.analyze is not None :
         if not os.path.isdir(args.analyze):
             logging.error(f"{args.analyze} is not a directory")
@@ -269,18 +241,6 @@ if __name__ == "__main__":
     
     joined_events = [",".join(event_list) for event_list in events_per_category.values()]
     all_events = ",".join(joined_events)
-    logging.info(joined_events)
-    logging.info(all_events)
-    
     program_path = args.run
-    benchmark_dir = collect_samples(program_path, all_events, 5, 1)
+    benchmark_dir = collect_samples(program_path, all_events, RESULTS_DIR_PATH, args.nruns, args.nwarmups)
     analyze_samples(benchmark_dir)
-    
-    
-    
-    # collect_samples(target, all_events, 5, 1)
-        
-    # test_events(target, all_events)
-
-        
-        

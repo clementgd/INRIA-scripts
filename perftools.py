@@ -62,6 +62,8 @@ def get_shell_command_output(command: str):
         shell=True, stdout = subprocess.PIPE, universal_newlines = True
     ).stdout.strip('\n')
 
+# TODO Name this differently ? Basically it contains all the data related to a particular run
+# RunData ?
 @dataclass
 class ConfigData:
     nodes_phys_mem_upper_boundaries: List[int]
