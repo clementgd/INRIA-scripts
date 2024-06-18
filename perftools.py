@@ -71,6 +71,7 @@ class ConfigData:
     alloc_df: pd.DataFrame
     mmap_df: pd.DataFrame
     objects_addr_df: pd.DataFrame
+    page_size: int
     
 # TODO : There should be a file alongside the perf data file that contains all that info
 class CustomPerfParser:
@@ -206,6 +207,7 @@ class CustomPerfParser:
         return kmem_df
 
 
+
     def get_event_counts(extracted_file_path: str):
         # 1: pid, 2: cpu, 3: timestamp, 4: period, 5: event
         kmem_regex = re.compile(r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(\S+):")
@@ -242,7 +244,7 @@ class CustomPerfParser:
         })
 
         
-    def read_mem_access_and_alloc_events(self, extracted_file_path: str, output_file_path: str):
+    def read_mem_access_and_alloc_events(self, extracted_file_path: str, output_file_path: str, map_alloc_virtual_pages: bool = False):
         # 1: pid, 2: cpu, 3: timestamp, 4: period, 5: event, 6: page, 7: pfn, 8: order
         page_alloc_regex = re.compile(r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(kmem:mm_page_alloc\S*): +page=0x([0-9a-f]+) +pfn=0x([0-9a-f]+) +order=(\d+)")
         # page_alloc_regex = re.compile(r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(kmem:\S*): +page=0x([0-9a-f]+) +pfn=0x([0-9a-f]+) +order=(\d+)")
@@ -371,20 +373,20 @@ class CustomPerfParser:
         alloc_df['cpu_node'] = alloc_df['cpuid'].map(self.cpuid_to_node)
         alloc_df['memory_node'] = alloc_df['pfn'].map(lambda x: self.get_node_for_physical_address(x * self.page_size))
         
-        print("Determining virtual pages corresponding with physical allocations (this may take several minutes)")
-        alloc_df['virt_page'] = alloc_df.apply(lambda x: find_virt_page_for_pfn(x.pfn, x.order, access_df, self.page_size, self.page_size_order), axis=1)
+        if map_alloc_virtual_pages:
+            print("Determining virtual pages corresponding with physical allocations (this may take several minutes)")
+            alloc_df['virt_page'] = alloc_df.apply(lambda x: find_virt_page_for_pfn(x.pfn, x.order, access_df, self.page_size, self.page_size_order), axis=1)
         
         # I guess what I could just do here is convert the allocation to their base address ?
         return ConfigData(self.node_upper_boundaries, access_df, alloc_df, mmap_df, self.read_output_virtual_memory_ranges(output_file_path))
     
     
-    def extract_and_read(self, file_name: str, dir_path: Optional[str] = None, force_rerun_extraction = False, executable = "cg.C.x", time_option = None):
+    def extract_and_read(self, file_name: str, dir_path: Optional[str] = None, map_alloc_virtual_pages = False, force_rerun_extraction = False, executable = "cg.C.x", time_option = None):
         extracted_file_path = self.extract_perf_data_file(file_name, dir_path, force_rerun_extraction, executable, time_option)
         if dir_path is None :
             dir_path = self.home_dir
         output_file_path = os.path.splitext(os.path.join(dir_path, file_name))[0] + ".output.txt"
-        # return self.read_output_virtual_memory_ranges(output_file_path)
-        return self.read_mem_access_and_alloc_events(extracted_file_path, output_file_path)
+        return self.read_mem_access_and_alloc_events(extracted_file_path, output_file_path, map_alloc_virtual_pages)
     
     
     
