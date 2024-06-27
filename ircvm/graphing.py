@@ -102,6 +102,15 @@ class BoxPlotter:
         
         return [ts for ts in self.time_series if matches(ts.name)]
     
+    def get_series_in_order(self, fuzzy_filters: Optional[List[str]]) :
+        if fuzzy_filters is None :
+            return self.time_series
+            
+        result = []
+        for filter in fuzzy_filters :
+            result += sorted([ts for ts in self.time_series if filter in ts.name], key=lambda x: x.name)
+        return result
+    
     def show_violin(self, displayType = DisplayType.VALUE, filters = None, exact_filters = None, size_factor = 2.5, title = None) :
         filtered_ts = self.get_series_filtered(fuzzy_filters=filters, exact_filters=exact_filters)
         # print([ts.name for ts in filtered_ts])
@@ -140,22 +149,31 @@ class BoxPlotter:
         plt.show()
             
             
-    def show_variations(self, title = None, filters = None, exact_filters = None) :
+    def show_variations(self, title = None, ordered_filters = None, exact_filters = None, w = 12, h = 6) :
         
-        filtered_ts = self.get_series_filtered(fuzzy_filters=filters, exact_filters=exact_filters)
+        # filtered_ts = self.get_series_filtered(fuzzy_filters=filters, exact_filters=exact_filters)
+        if ordered_filters is None :
+            ordered_filters = ["sockets", "sockorder", "sequential", "none"]
+        filtered_ts = self.get_series_in_order(ordered_filters)
         print([ts.name for ts in filtered_ts])
             
         # data_df = pd.DataFrame({f"{ts.name} ({len(ts.values)})": ts.values for ts in filtered_ts})
         data_df = pd.DataFrame({f"{ts.name} ({len(ts.values)})": ts.values for ts in filtered_ts})
         means = data_df.mean()
         reference_value = min(means)
-        sorted_data_df = data_df[means.sort_values().index]
+        # sorted_data_df = data_df[means.sort_values().index]
+        sorted_data_df = data_df
         for col in sorted_data_df :
             sorted_data_df[col] = ((sorted_data_df[col] - reference_value) * 100) / reference_value
         
+        plt.gcf().set_size_inches(w, h)
         plt.ylabel("% slower than best average runtime")
-        sns.boxplot(data = sorted_data_df)
-        plt.xticks(rotation=15, ha='right')
+        g = sns.boxplot(data = sorted_data_df, showmeans=True, meanprops={'marker':'D',
+                       'markerfacecolor':'white', 
+                       'markeredgecolor':'black',
+                       'markersize':'5'})
+        # g.set_yscale("log")
+        plt.xticks(rotation=18, ha='right')
         plt.minorticks_on()
         plt.grid(axis="y", which="both")
         plt.grid(axis="x", which="major")
