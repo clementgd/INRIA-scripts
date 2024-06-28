@@ -45,8 +45,10 @@ def get_trace_broken_work_conservation_time(dat_file_path: str) -> float :
     if match :
         return float(match.group(1))
     
+# TODO Rename get_batch_dataframe
 def get_runs_dataframe(dir_path: str, use_cache: bool, cache_filename: str, sort_by_duration = True, include_broken_wc = True) -> pd.DataFrame :
     if not os.path.exists(dir_path) :
+        print("get_runs_dataframe : path does not exist")
         return None
 
     # Policy is aggressive rewrite to cache
