@@ -2,6 +2,8 @@ import pandas as pd
 import subprocess
 import re
 import os
+import json
+from typing import List
 
 
 def get_run_index(filename: str) -> int :
@@ -80,6 +82,81 @@ def get_runs_dataframe(dir_path: str, use_cache: bool, cache_filename: str, sort
     min_duration = df['duration'].min()
     df['variation'] = (df['duration'] - min_duration) * 100 / min_duration
     return df
+
+
+def extract_hyperfine_dataframe(filepath: str):
+    with open(filepath, "r") as f:
+        data = json.load(f)
+    duration_values: List[float] = data['results'][0]['times']
+    n = len(duration_values)
+        
+    df = pd.DataFrame({
+        "filename": [os.path.basename(filepath)] * n,
+        "duration": duration_values,
+        "exists": [False] * n,
+        "run_index": [i + 1 for i in range(n)]
+    })
+    return df.sort_values("duration", ignore_index=True)
+
+
+def get_batch_dataframe(dir_path: str, use_cache = True, cache_filename: str = None, sort_by_duration = True, include_broken_wc = False) -> pd.DataFrame :
+    if not os.path.exists(dir_path) :
+        print("get_runs_dataframe : path does not exist")
+        return None
+    
+    def compute_variation(df: pd.DataFrame):
+        min_duration = df['duration'].min()
+        df['variation'] = (df['duration'] - min_duration) * 100 / min_duration
+        return df
+    
+    def get_cache_filepath():
+        if not use_cache:
+            return None
+        if cache_filename is None :
+            print("None cache filename !")
+            return None
+        cache_path = os.path.join(dir_path, cache_filename + ".csv")
+        if not os.path.isfile(cache_path):
+            print("Unable to find cache file !")
+            return None
+        return cache_path
+    
+    # First check if there is a hyperfine file
+    json_files = [filename for filename in os.listdir(dir_path) if filename.endswith(".json")]
+    if len(json_files) > 0 :
+        if len(json_files) == 1:
+            df = extract_hyperfine_dataframe(os.path.join(dir_path, json_files[0]))
+            return compute_variation(df)
+        else :
+            print(f"{len(json_files)} json files found in dir {dir_path}")
+
+    # Policy is aggressive rewrite to cache
+    cache_path = get_cache_filepath()
+    if cache_path is not None:
+        df = pd.read_csv(cache_path)
+        if sort_by_duration :
+            df.sort_values('duration', ignore_index=True, inplace=True)
+        if include_broken_wc and 'broken_wc_time' not in df.columns :
+            df['broken_wc_time'] = df['filename'].map(lambda x: get_trace_broken_work_conservation_time(os.path.join(dir_path, x)))
+            df.to_csv(cache_path, encoding='utf-8', index=False)
+        df['exists'] = df['filename'].map(lambda x: os.path.isfile(os.path.join(dir_path, x)))
+    else :
+        dat_files = [file for file in os.listdir(dir_path) if file.endswith('.dat')]
+        ndat = len(dat_files)
+        if ndat == 0 :
+            print(f"get_runs_dataframe : no trace files found in {dir_path}, skipping")
+            return None
+        
+        df = pd.DataFrame({'filename': dat_files})
+        df['duration'] = df['filename'].map(lambda x: get_trace_duration(os.path.join(dir_path, x)))
+        if include_broken_wc :
+            df['broken_wc_time'] = df['filename'].map(lambda x: get_trace_broken_work_conservation_time(os.path.join(dir_path, x)))
+        df.sort_values('duration', ignore_index=True, inplace=True)
+        df.to_csv(cache_path, encoding='utf-8', index=False)
+        df['exists'] = True
+    
+    df['run_index'] = df['filename'].map(get_run_index)
+    return compute_variation(df)
 
 
 
