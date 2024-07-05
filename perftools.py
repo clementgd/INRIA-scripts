@@ -62,10 +62,10 @@ def get_shell_command_output(command: str):
         shell=True, stdout = subprocess.PIPE, universal_newlines = True
     ).stdout.strip('\n')
 
-# TODO Name this differently ? Basically it contains all the data related to a particular run
-# RunData ?
+
+# TODO Move the machine data like page size into here
 @dataclass
-class ConfigData:
+class RunMemoryData:
     nodes_phys_mem_upper_boundaries: List[int]
     access_df: pd.DataFrame
     alloc_df: pd.DataFrame
@@ -74,10 +74,9 @@ class ConfigData:
     page_size: int
     
 # TODO : There should be a file alongside the perf data file that contains all that info
+# TODO : Why need for a class ?
+# -> This class because lots of functions needed to parse and allows to group them
 class CustomPerfParser:
-    # def __init__(self, cpuid_to_node: Dict[int, int], get_node_for_physical_address: Callable[[int], int], page_size: int) -> None:
-    #     self.cpuid_to_node = cpuid_to_node
-    #     self.get_node_for_physical_address = get_node_for_physical_address
     
     def __init__(self, home_dir: str) -> None:
         self.home_dir = home_dir
@@ -136,19 +135,20 @@ class CustomPerfParser:
         return boundary_idx 
 
 
+    # Calls perf's extraction command from the shell
+    # Produces an extracted file and returns the path to that file
     def extract_perf_data_file(self, file_name: str, dir_path: Optional[str] = None, 
-                               force_rerun_extraction: Optional[bool] = False, executable: Optional[str] = None, 
+                               force_rerun_extraction: Optional[bool] = False, 
+                               executable: Optional[str] = None, 
                                time_option: Optional[str] = None):
         if dir_path is None:
             dir_path = self.home_dir
         file_path = os.path.join(dir_path, file_name)
         
         sha1sum = get_shell_command_output(f"sha1sum {file_path}")
-        print(f"Computed checksum : {sha1sum}")
+        # print(f"Computed checksum : {sha1sum}")
         extracted_file_path = file_path + ".log"
-        
-        # output_file_path = os.path.splitext(file_path)[0] + ".output.txt"
-        
+                
         if not force_rerun_extraction and os.path.isfile(extracted_file_path):
             with open(extracted_file_path, 'r') as f:
                 first_line = f.readline().strip("\n")
@@ -160,9 +160,10 @@ class CustomPerfParser:
         with open(extracted_file_path, 'w') as f:
             f.write(f"{sha1sum}\n")
             
-        executable_filter = f"-c {executable}" if executable is not None else ""
+        exec_filter = f"-c {executable}" if executable is not None else ""
         time_filter = f"--time {time_option}" if time_option is not None else ""
-        command_str = f"perf script -i {file_path} -L -F +period {executable_filter} {time_filter} >> {extracted_file_path}"
+        command_str = (f"perf script -i {file_path} -L -F +period "
+                       f"{exec_filter} {time_filter} >> {extracted_file_path}")
         print(f"Executing extraction command : {command_str}")
         result = subprocess.run(
             command_str,
@@ -174,8 +175,10 @@ class CustomPerfParser:
         
         return extracted_file_path
         
-        
-    def read_kmem_events(self, extracted_file_path: str, get_node_info = False):
+    
+    
+    def read_kmem_events(self, extracted_file_path: str, 
+                         get_node_info = False) -> pd.DataFrame:
         # 1: pid, 2: cpu, 3: timestamp, 4: period, 5: event
         kmem_regex = re.compile(r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(kmem:\S*):")
         
@@ -221,9 +224,12 @@ class CustomPerfParser:
         return event_counts
     
     
-    def read_output_virtual_memory_ranges(self, file_path: str):
+    
+    def read_output_virtual_memory_ranges(self, file_path: Optional[str]):
+        if file_path is None or not os.path.exists(file_path):
+            return pd.DataFrame()
+        
         virt_addr_regex = re.compile(r" +VIRT_ADDR of (\S+): +(\d+) +size: +(\d+).*")
-        # virt_addr_regex = re.compile(r"VIRT_ADDR of (\S+):")
         
         object_names = []
         virtual_addresses = []
@@ -233,6 +239,7 @@ class CustomPerfParser:
             for line in f:
                 matched = virt_addr_regex.search(line)
                 if matched:
+                    print(f"Matched line : {line}")
                     object_names.append(matched[1])
                     virtual_addresses.append(int(matched[2]))
                     sizes.append(int(matched[3]))
@@ -244,20 +251,28 @@ class CustomPerfParser:
         })
 
         
-    def read_mem_access_and_alloc_events(self, extracted_file_path: str, output_file_path: str, map_alloc_virtual_pages: bool = False):
+    def read_mem_access_and_alloc_events(self, extracted_file_path: str, 
+                                         output_file_path: str) -> RunMemoryData:
         # 1: pid, 2: cpu, 3: timestamp, 4: period, 5: event, 6: page, 7: pfn, 8: order
-        page_alloc_regex = re.compile(r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(kmem:mm_page_alloc\S*): +page=0x([0-9a-f]+) +pfn=0x([0-9a-f]+) +order=(\d+)")
-        # page_alloc_regex = re.compile(r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(kmem:\S*): +page=0x([0-9a-f]+) +pfn=0x([0-9a-f]+) +order=(\d+)")
+        page_alloc_regex = re.compile(
+            r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(kmem:mm_page_alloc\S*): "
+            r"+page=0x([0-9a-f]+) +pfn=0x([0-9a-f]+) +order=(\d+)")
 
         # 1: pid, 2: cpuid, 3: timestamp, 4: period, 5: event, 6: virt_addr 
         basic_info_pattern = r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +(\d+) +(\S+): +([0-9a-f]+)"
         
         # 1: cache_result, 2: tlb_result, 3: latency, 4: phys_adress
-        data_src_with_latency_pattern = r"[0-9a-f]+ \|OP (?:LOAD|STORE)\|([^\|]+)\|[^\|]+\|(TLB [^\|]+)\|[^\|]+\|[a-zA-Z\/\- ]+(\d+) +\d+ +[0-9a-f]+.+ ([0-9a-f]+)"
-        access_with_latency_regex = re.compile(basic_info_pattern + r" +" + data_src_with_latency_pattern)
+        data_src_with_latency_pattern = (
+            r"[0-9a-f]+ \|OP (?:LOAD|STORE)\|([^\|]+)\|[^\|]+\|(TLB [^\|]+)\|"
+            r"[^\|]+\|[a-zA-Z\/\- ]+(\d+) +\d+ +[0-9a-f]+.+ ([0-9a-f]+)")
+        access_with_latency_regex = re.compile(
+            basic_info_pattern + r" +" + data_src_with_latency_pattern)
         
         # 1: pid, 2: cpu, 3: time, 4: addr, 5: len, 6: prot, 7: flags, 8: fd, 9: offset 
-        enter_mmap_regex = re.compile(r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +\d+ +syscalls:sys_enter_mmap: +addr: +0x([0-9a-f]+), +len: +0x([0-9a-f]+), +prot: +0x([0-9a-f]+), flags: +0x([0-9a-f]+), +fd: +0x([0-9a-f]+), +off: +0x([0-9a-f]+)")
+        enter_mmap_regex = re.compile(
+            r"^ *\S+ +(\d+) +(\d+) +(\d+\.\d+): +\d+ +syscalls:sys_enter_mmap:"
+            r" +addr: +0x([0-9a-f]+), +len: +0x([0-9a-f]+), +prot: +0x([0-9a-f]+), "
+            r"flags: +0x([0-9a-f]+), +fd: +0x([0-9a-f]+), +off: +0x([0-9a-f]+)")
         
         access_cpuids = []
         access_timestamps = []
@@ -283,10 +298,12 @@ class CustomPerfParser:
         mmap_fds = []
         mmap_offsets = []
         
+        lines_count = 0
         not_matched_lines_count = 0
                 
         with open(extracted_file_path) as f :
             for line in f :
+                lines_count += 1
                 matched = access_with_latency_regex.match(line)
                 if matched:
                     phys_addr = int(matched[10], base=16)
@@ -327,7 +344,7 @@ class CustomPerfParser:
                 
                 not_matched_lines_count += 1
         
-        print(f"{not_matched_lines_count} lines not matched")
+        print(f"{not_matched_lines_count} lines not matched / {lines_count}")
         
         access_df = pd.DataFrame({
             "cpuid": access_cpuids,  
@@ -359,10 +376,9 @@ class CustomPerfParser:
             'offset': mmap_offsets
         })
         
-        # print(f"min access df : {access_df['time'].min()}")
-        # print(f"min alloc df : {alloc_df['time'].min()}")
+        # More practical to do that than to try and extract initial time out 
+        # of the first line that has a timestamp
         initial_timestamp = min(access_df['time'].min(), alloc_df['time'].min(), mmap_df['time'].min())
-        # print(f"min of the two : {initial_timestamp}")
         access_df['time'] = access_df['time'] - initial_timestamp
         alloc_df['time'] = alloc_df['time'] - initial_timestamp
         mmap_df['time'] = mmap_df['time'] - initial_timestamp
@@ -373,12 +389,12 @@ class CustomPerfParser:
         alloc_df['cpu_node'] = alloc_df['cpuid'].map(self.cpuid_to_node)
         alloc_df['memory_node'] = alloc_df['pfn'].map(lambda x: self.get_node_for_physical_address(x * self.page_size))
         
-        if map_alloc_virtual_pages:
-            print("Determining virtual pages corresponding with physical allocations (this may take several minutes)")
-            alloc_df['virt_page'] = alloc_df.apply(lambda x: find_virt_page_for_pfn(x.pfn, x.order, access_df, self.page_size, self.page_size_order), axis=1)
+        # print("Determining virtual pages corresponding with physical allocations (this may take several minutes)")
+        # alloc_df['virt_page'] = alloc_df.apply(lambda x: find_virt_page_for_pfn(x.pfn, x.order, access_df, self.page_size, self.page_size_order), axis=1)
         
         # I guess what I could just do here is convert the allocation to their base address ?
-        return ConfigData(self.node_upper_boundaries, access_df, alloc_df, mmap_df, self.read_output_virtual_memory_ranges(output_file_path))
+        # TODO Get rid of objects memory ranges, plus they need to use a different version of the NAS bench
+        return RunMemoryData(self.node_upper_boundaries, access_df, alloc_df, mmap_df, self.read_output_virtual_memory_ranges(output_file_path))
     
     
     def extract_and_read(self, file_name: str, dir_path: Optional[str] = None, map_alloc_virtual_pages = False, force_rerun_extraction = False, executable = "cg.C.x", time_option = None):
@@ -386,13 +402,13 @@ class CustomPerfParser:
         if dir_path is None :
             dir_path = self.home_dir
         output_file_path = os.path.splitext(os.path.join(dir_path, file_name))[0] + ".output.txt"
-        return self.read_mem_access_and_alloc_events(extracted_file_path, output_file_path, map_alloc_virtual_pages)
+        return self.read_mem_access_and_alloc_events(extracted_file_path, output_file_path)
     
     
     
     
 
-def bounds_for_object(config_data: ConfigData, object_name: str):
+def bounds_for_object(config_data: RunMemoryData, object_name: str):
     res_df = config_data.objects_addr_df.loc[config_data.objects_addr_df['name'] == object_name]
     if len(res_df) == 0:
         return None
