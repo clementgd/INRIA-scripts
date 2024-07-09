@@ -10,6 +10,96 @@ from experiments_lib import (
 import logging
 import argparse
 import os
+from time import process_time_ns
+from bisect import bisect_left
+from perf_lib import CustomPerfParser, RunMemoryData, filter_in_bounds, filter_cpu, bounds_for_object
+import numpy as np
+
+
+def compute_page_sharing_stats(run_data: RunMemoryData):
+    allocation_df = run_data.alloc_df
+    allocation_df = allocation_df.loc[allocation_df["order"] > 0]
+    n_filtered_allocations = len(allocation_df)
+    print(f"Filtered out {len(run_data.alloc_df)} single page allocations ({n_filtered_allocations} remaining)")
+    allocation_df = allocation_df.sort_values("pfn", ignore_index=True)
+    print("Sorted allocations")
+
+    access_df = run_data.access_df.sort_values("phys", ignore_index=True)
+    print(f"Sorted {len(access_df) / 1e6} million accesses")
+    access_df["pfn"] = access_df["phys"].values >> run_data.page_size_order
+    print("Computed accesses pfns")
+    
+    access_idx = 0
+
+    alloc_pfns = allocation_df["pfn"].to_numpy()
+    alloc_orders = allocation_df["order"].to_numpy()
+    access_pfns = access_df["pfn"].to_numpy()
+    access_cpus = access_df["cpuid"].to_numpy()
+    access_nodes = access_df["cpu_node"].to_numpy()
+
+    previous_alloc_pfn = -1
+    
+    n_allocations_not_accessed = 0
+    not_shared_allocations_pfns = []
+    # For each allocation, how many small pages are shared
+    n_node_shared_pages_per_allocation_pfn = {}
+    n_cpu_shared_pages_per_allocation_pfn = {}
+
+    for alloc_pfn, order in zip(alloc_pfns, alloc_orders):
+        if alloc_pfn == previous_alloc_pfn:
+            continue
+        previous_alloc_pfn = alloc_pfn
+        max_alloc_pfn = alloc_pfn + (1 << order)
+
+        access_idx = bisect_left(access_pfns, alloc_pfn, lo = access_idx)
+        if access_pfns[access_idx] >= max_alloc_pfn:
+            n_allocations_not_accessed += 1
+            continue
+        
+        # TODO Change it to cpu shared to see what it changes
+        next_access_idx = bisect_left(access_pfns, max_alloc_pfn, lo = access_idx)
+        unique_nodes = np.unique(access_nodes[access_idx:next_access_idx]) # TODO Make sure we are not including the next index
+        if len(unique_nodes) <= 1:
+            # Page connot be false shared if it is not shared
+            not_shared_allocations_pfns.append(alloc_pfn)
+            continue
+
+        n_node_shared_pages = 0
+        n_cpu_shared_pages = 0
+
+        curr_pfn = -1
+        curr_cpu = -1
+        curr_node = -1
+        is_page_cpu_shared = False
+        is_page_node_shared = False
+        while access_idx < next_access_idx:
+            if access_pfns[access_idx] != curr_pfn:
+                if is_page_node_shared:
+                    n_cpu_shared_pages += 1
+                    n_node_shared_pages += 1
+                elif is_page_cpu_shared:
+                    n_cpu_shared_pages += 1
+                
+                curr_pfn = access_pfns[access_idx]
+                curr_cpu = access_cpus[access_idx]
+                curr_node = access_nodes[access_idx]
+                is_page_cpu_shared = False
+                is_page_node_shared = False
+                
+            elif access_nodes[access_idx] != curr_node:
+                is_page_node_shared = True
+                # Nothing to see on that page anymore
+                access_idx = bisect_left(access_pfns, curr_pfn + 1, lo = access_idx)
+            elif access_cpus[access_idx] != curr_cpu:
+                is_page_cpu_shared = True
+                
+            access_idx += 1
+            
+        n_node_shared_pages_per_allocation_pfn[alloc_pfn] = n_node_shared_pages
+        n_cpu_shared_pages_per_allocation_pfn[alloc_pfn] = n_cpu_shared_pages
+    
+    return not_shared_allocations_pfns, n_node_shared_pages_per_allocation_pfn, n_cpu_shared_pages_per_allocation_pfn, n_filtered_allocations
+    
 
 
     
