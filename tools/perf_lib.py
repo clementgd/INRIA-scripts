@@ -401,10 +401,12 @@ class CustomPerfParser:
     
     
     def extract_and_read(self, file_name: str, dir_path: Optional[str] = None, map_alloc_virtual_pages = False, force_rerun_extraction = False, executable = "cg.C.x", time_option = None):
+        print("Extracting perf data file. This can take a couple minutes...")
         extracted_file_path = self.extract_perf_data_file(file_name, dir_path, force_rerun_extraction, executable, time_option)
         if dir_path is None :
             dir_path = self.home_dir
         output_file_path = os.path.splitext(os.path.join(dir_path, file_name))[0] + ".output.txt"
+        print("Parsing extracted perf data file. This can take a couple minutes...")
         return self.read_mem_access_and_alloc_events(extracted_file_path, output_file_path)
     
     
