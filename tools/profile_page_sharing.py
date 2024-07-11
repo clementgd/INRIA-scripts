@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 
 
+results_filename = "profiler_results.txt"
+
 
 def compare_numbers(first: int, second: int):
     def show(number):
@@ -216,10 +218,10 @@ def print_stats(stats_df: pd.DataFrame, total_l3_remote_dram: int, file_name: st
     n_all_cpu_shared_allocs = len(all_cpu_shared_df)
     n_false_cpu_shared_allocs = len(all_cpu_false_shared_df)
     
-    print(f"\n\n###### Statistics for data file : {file_name} ######")
-    print(f"Number of NODE false shared / all NODE shared (true + false) large allocations : {compare_numbers(n_false_node_shared_allocs, n_all_node_shared_allocs)}")
-    print(f"Number of CPU false shared / all CPU shared (true + false) large allocations : {compare_numbers(n_false_cpu_shared_allocs, n_all_cpu_shared_allocs)}")
-    
+    output = ""
+    output += f"\n\n###### Statistics for data file : {file_name} ######\n"
+    output += f"Number of NODE false shared / all NODE shared (true + false) large allocations : {compare_numbers(n_false_node_shared_allocs, n_all_node_shared_allocs)}\n"
+    output += f"Number of CPU false shared / all CPU shared (true + false) large allocations : {compare_numbers(n_false_cpu_shared_allocs, n_all_cpu_shared_allocs)}\n"
     
     # l3_remote_dram_counts = np.array(list(stats.n_l3_remote_dram_per_allocation_pfn.values()), dtype=int)
     
@@ -234,14 +236,18 @@ def print_stats(stats_df: pd.DataFrame, total_l3_remote_dram: int, file_name: st
 
     # total_l3_remote_dram_false_shared = sum(l3_remote_dram_counts[node_shared_counts == 0])
     # total_l3_remote_dram_true_shared = sum(l3_remote_dram_counts[node_shared_counts > 0])
-
-    print("\nNumber of mem_load_l3_miss_retired.remote_dram in : ")
-    print(f" - false NODE shared pages / all NODE shared pages -- in large allocations : {compare_numbers(total_l3_remote_dram_false_node_shared, total_l3_remote_dram_all_node_shared)}")
-    print(f" - all NODE shared pages / all pages -- in large allocations : {compare_numbers(total_l3_remote_dram_all_node_shared, total_l3_remote_dram_large_allocations)}")
-    print(f" - false CPU shared pages / all CPU shared pages  -- in large allocations : {compare_numbers(total_l3_remote_dram_false_cpu_shared, total_l3_remote_dram_all_cpu_shared)}")
-    print(f" - all CPU shared pages / all pages -- in large allocations : {compare_numbers(total_l3_remote_dram_all_cpu_shared, total_l3_remote_dram_large_allocations)}")
-    print(f" - large allocations / all allocations : {compare_numbers(total_l3_remote_dram_large_allocations, total_l3_remote_dram)}")
-    print("###### - ######\n")
+    
+    output += "\nNumber of mem_load_l3_miss_retired.remote_dram in :\n"
+    output += f" - false NODE shared pages / all NODE shared pages -- in large allocations : {compare_numbers(total_l3_remote_dram_false_node_shared, total_l3_remote_dram_all_node_shared)}\n"
+    output += f" - all NODE shared pages / all pages -- in large allocations : {compare_numbers(total_l3_remote_dram_all_node_shared, total_l3_remote_dram_large_allocations)}\n"
+    output += f" - false CPU shared pages / all CPU shared pages  -- in large allocations : {compare_numbers(total_l3_remote_dram_false_cpu_shared, total_l3_remote_dram_all_cpu_shared)}\n"
+    output += f" - all CPU shared pages / all pages -- in large allocations : {compare_numbers(total_l3_remote_dram_all_cpu_shared, total_l3_remote_dram_large_allocations)}\n"
+    output += f" - large allocations / all allocations : {compare_numbers(total_l3_remote_dram_large_allocations, total_l3_remote_dram)}\n"
+    output += "###### - ######\n\n"
+    
+    with open(results_filename, 'a') as f:
+        f.write(output)
+    print(output)
 
 
 
@@ -307,9 +313,9 @@ if __name__ == "__main__":
     analyze_dir(save_dir_path)
 
     
-# ./profile_page_sharing.py --analyze /tmp/perf/cg.C.x__dahu-32__v6.8.0-rc3__performance__2024-07-10/perf-mem-all-sequential.data
+# ./profile_page_sharing.py --analyze_dir /tmp/perf/cg.C.x__dahu-14__v6.8.0-rc3__performance__2024-07-11
 
-# ./profile_page_sharing.py --nwarmups 0  --run /root/npb/NPB3.4-OMP/bin/cg.C.x
+# ./profile_page_sharing.py --nwarmups 2  --run /root/npb/NPB3.4-OMP/bin/cg.C.x
 
 
 # ./profile_page_sharing.py --analyze_dir /tmp/perf/cg.C.x__dahu-32__v6.8.0-rc3__performance__2024-07-10
