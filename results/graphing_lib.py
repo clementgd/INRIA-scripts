@@ -5,7 +5,7 @@ import os
 from matplotlib import pyplot as plt
 import seaborn as sns
 
-from analysis_lib import get_runs_dataframe
+from benchmarks_lib import get_runs_dataframe
 
 class DataType(Enum) :
     DURATION = 1
